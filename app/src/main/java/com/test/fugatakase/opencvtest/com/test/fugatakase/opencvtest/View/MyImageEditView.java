@@ -5,6 +5,7 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.PorterDuff;
 import android.util.AttributeSet;
 import android.view.MotionEvent;
 import android.view.View;
@@ -38,9 +39,11 @@ public class MyImageEditView extends View{
     private int dispWidth;
     private int dispHeight;
 
-    private double threshold;    // 0 <= threshole <= 1 閾値
+    private double threshold = 0.05;    // 閾値
     private int touchPointX;
     private int touchPointY;
+    private int movePointX;
+    private int movePointY;
     private double[] touchPointColorLab;
 
     private boolean withMask;
@@ -71,9 +74,6 @@ public class MyImageEditView extends View{
         MAX_COLOR_DISTANCE = dif(whiteLab[0],whiteLab[1],whiteLab[2],blackLab[0],blackLab[1],blackLab[2]);
 
     }
-
-    private double MaxMoveDistance;
-
 
     private final double[] MASC_COLOR_BGRA = {255, 0, 0, 0};
 
@@ -137,8 +137,6 @@ public class MyImageEditView extends View{
 
         withMask = false;
 
-        MaxMoveDistance = Math.sqrt(Math.pow(this.dispWidth / 2d, 2d) + Math.pow(dispHeight / 2d , 2d));
-
         setBitmap(src);
 
         invalidate();
@@ -162,7 +160,7 @@ public class MyImageEditView extends View{
         Imgproc.resize(srcMat,dispMat, new Size(0,0) , scale ,scale, Imgproc.INTER_AREA);
 
         //　色差計算用のLab表色系に変換したMatを用意
-        labMat = new Mat();
+        labMat = new Mat(dispMat.size(), CvType.CV_8UC3);
         Imgproc.cvtColor(dispMat, labMat, Imgproc.COLOR_BGRA2BGR);
         Imgproc.cvtColor(labMat, labMat, Imgproc.COLOR_BGR2Lab);
 
@@ -205,7 +203,6 @@ public class MyImageEditView extends View{
         Mat brendMat = new Mat();
         Core.addWeighted(dispMat, 0.8d, maskMat, 0.2d, 1.0d, brendMat);
 
-
         Bitmap resultBitmap = Bitmap.createBitmap(brendMat.width(), brendMat.height(), Bitmap.Config.ARGB_8888);
         Utils.matToBitmap(brendMat, resultBitmap ,true);
 
@@ -222,9 +219,6 @@ public class MyImageEditView extends View{
 
     @Override
     protected void onDraw(Canvas canvas) {
-        super.onDraw(canvas);
-
-
         // ペイント生成
         Paint imagePaint = new Paint();
         canvas.drawBitmap(getDispBitmap(withMask),0 ,0 , imagePaint);
@@ -264,14 +258,24 @@ public class MyImageEditView extends View{
 
     private void onTouchDown(MotionEvent event) {
         redoViewStack.clear();
-        threshold = 0;
+        //マスク画像を透明で初期化
+        maskMat = new Mat(dispMat.size(), CvType.CV_8UC4, Scalar.all(255));
+        cutMat = new Mat(dispMat.size(), CvType.CV_8UC4, Scalar.all(0));
 
         touchPointX = Math.round(event.getX());
+        if(touchPointX > dispMat.width()){
+            touchPointX = dispMat.width() -1;
+            movePointX = touchPointX;
+        }
         touchPointY = Math.round(event.getY());
+        if(touchPointY > dispMat.height()){
+            touchPointY = dispMat.height() -1;
+            movePointY = touchPointY;
+        }
 
         touchPointColorLab = new double[3];
 
-        touchPointColorLab = labMat.get(touchPointX,touchPointY);
+        touchPointColorLab = labMat.get(touchPointY, touchPointX);
 
         createMaskImage(touchPointX, touchPointY);
         invalidate();
@@ -282,13 +286,10 @@ public class MyImageEditView extends View{
 
         redoViewStack.clear();
 
-        int pointX = Math.round(event.getX());
-        int pointY = Math.round(event.getY());
-        double dist = Math.sqrt(Math.pow(pointX - touchPointX , 2d) + Math.pow(pointY - touchPointY , 2d));
+        movePointX = Math.round(event.getX());
+        movePointY = Math.round(event.getY());
 
-        threshold = dist / MaxMoveDistance;
-
-        createMaskImage(touchPointX, touchPointY);
+        createMaskImage(movePointX, movePointY);
         invalidate();
 
     }
@@ -304,30 +305,27 @@ public class MyImageEditView extends View{
 
     private void createMaskImage(int x , int y){
 
-        //マスク画像を透明で初期化
-        maskMat = new Mat(dispMat.size(), CvType.CV_8UC4, Scalar.all(255));
-        cutMat = new Mat(dispMat.size(), CvType.CV_8UC4, Scalar.all(0));
 
-        int currentX = x;
-        int currentY = y;
+        judgeColor(x ,y);
 
-        while(currentY >= 0 && isInARangeColor(labMat.get(currentX,currentY))){
-            while(currentX >= 0 && isInARangeColor(labMat.get(currentX,currentY))) {
-                while (currentY < maskMat.height() && isInARangeColor(labMat.get(currentX,currentY))) {
-                    while (currentX < maskMat.width()) {
-                        if(isInARangeColor(labMat.get(currentX,currentY)) && !isEqualBGRAColor(maskMat.get(currentX,currentY), MASC_COLOR_BGRA)) {
-                            maskMat.put(currentX, currentY, MASC_COLOR_BGRA);
-                            cutMat.put(currentX, currentY, new double[]{0,0,0,255});
-                            currentX++;
-                        }else{
-                            break;
+    }
+
+    private void judgeColor(int x, int y){
+
+        for (int i = x - 30;  i <= x + 30 ; i++ ){
+            if(i >= 0 && i < dispMat.width()) {
+                for (int j = y - 30; j <= y + 30; j++) {
+                    if (j >= 0 && j < dispMat.height()) {
+
+                        if (isInARangeColor(labMat.get(j, i))) {
+                            maskMat.put(j, i, MASC_COLOR_BGRA);
+                            cutMat.put(j, i, new double[]{255, 255, 255, 255});
+
                         }
+
                     }
-                    currentY++;
                 }
-                currentX--;
             }
-            currentY--;
         }
     }
 
@@ -345,7 +343,7 @@ public class MyImageEditView extends View{
             return false;
         }
 
-        if (dif(touchPointColorLab[0], touchPointColorLab[1], touchPointColorLab[2], labColor[0], labColor[1], labColor[2]) / MAX_COLOR_DISTANCE <= threshold ){
+        if (dif(touchPointColorLab[0], touchPointColorLab[1], touchPointColorLab[2], labColor[0], labColor[1], labColor[2]) / (MAX_COLOR_DISTANCE * threshold) <= 1 ){
             return true;
         }
 
